@@ -5,8 +5,11 @@ project (libviso2)
 # directories
 set (LIBVISO2_SRC_DIR src)
 
+SET(OpenCV_DIR C:/Users/megamusz/Downloads/opencv-3.2.0-vc14/opencv/build/)
 # include directory
 include_directories("${LIBVISO2_SRC_DIR}")
+
+find_package(OpenCV REQUIRED)
 
 # use sse3 instruction set
 SET(CMAKE_CXX_FLAGS "-msse3")
@@ -19,5 +22,5 @@ set(CMAKE_BUILD_TYPE Release)
 
 # demo program
 add_executable(viso2 ${LIBVISO2_SRC_FILES})
-target_link_libraries (viso2 png)
+target_link_libraries (viso2 ${OpenCV_LIBS})
 

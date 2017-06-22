@@ -32,9 +32,13 @@ Street, Fifth Floor, Boston, MA 02110-1301, USA
 #include <stdint.h>
 
 #include <viso_stereo.h>
-#include <png++/png.hpp>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/calib3d.hpp>
+//#include <png++/png.hpp>
 
 using namespace std;
+using namespace cv;
 
 int main (int argc, char** argv) {
 
@@ -76,12 +80,15 @@ int main (int argc, char** argv) {
     try {
 
       // load left and right input image
-      png::image< png::gray_pixel > left_img(left_img_file_name);
-      png::image< png::gray_pixel > right_img(right_img_file_name);
-
+      //png::image< png::gray_pixel > left_img(left_img_file_name);
+      //png::image< png::gray_pixel > right_img(right_img_file_name);
+		cout << left_img_file_name << endl;
+		Mat left_img = imread(left_img_file_name, IMREAD_GRAYSCALE);
+		Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
+		
       // image dimensions
-      int32_t width  = left_img.get_width();
-      int32_t height = left_img.get_height();
+		int32_t width = left_img.cols;// left_img.get_width();
+		int32_t height = left_img.rows;// left_img.get_height();
 
       // convert input images to uint8_t buffer
       uint8_t* left_img_data  = (uint8_t*)malloc(width*height*sizeof(uint8_t));
@@ -89,8 +96,8 @@ int main (int argc, char** argv) {
       int32_t k=0;
       for (int32_t v=0; v<height; v++) {
         for (int32_t u=0; u<width; u++) {
-          left_img_data[k]  = left_img.get_pixel(u,v);
-          right_img_data[k] = right_img.get_pixel(u,v);
+			left_img_data[k] = left_img.at<uchar>(v, u);// left_img.get_pixel(u, v);
+			right_img_data[k] = right_img.at<uchar>(v, u);// right_img.get_pixel(u, v);
           k++;
         }
       }
