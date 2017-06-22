@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 #include <stdint.h>
-
+#include <fstream>
 #include <viso_stereo.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -12,32 +12,58 @@
 using namespace std;
 using namespace cv;
 
+//get the project matrix from KITTI calibration file, as well as initialize the param for VOstereo
+Matrix getProjectionMatrix(string calibFileName, VisualOdometryStereo::parameters& param) {
+	ifstream f(calibFileName);
+	double *pDat = new double[4 * 3];
+	//string temp;
+	f >> string();
+	
+	for (int m = 0; m < 3; m++) {
+		for (int n = 0; n < 4; n++) {
+			f >> pDat[m * 4 + n];
+			//cout << pDat[m * 4 + n];
+		}
+	}
+	f >> string();
+	double baseFocal;
+	for (int i = 0; i < 4; i++)
+		f >> baseFocal;
+
+	Matrix P(3, 4, pDat);
+
+	param.calib.f = pDat[0];	// focal length in pixels
+	param.calib.cu = pDat[2];	// principal point (u-coordinate) in pixels
+	param.calib.cv = pDat[6];	// principal point (v-coordinate) in pixels
+	param.base = -baseFocal/param.calib.f; // baseline in meters, = P1(1, 4)/f
+
+	delete[] pDat;
+
+	return P;
+}
+
 int main(int argc, char** argv)
 {
+	if (argc < 3) {
+		cout << "usage: optflow directory seqenceIdx" << endl;
+	}
 	//C:\Users\megamusz\Desktop\data_stereo_flow\training
 	string dir = argv[1];
+	int seqIdx = atoi(argv[2]);
+
 
 	// for a full parameter list, look at: viso_stereo.h
 	VisualOdometryStereo::parameters param;
 
-	// calibration parameters for sequence 2010_03_09_drive_0019 
-	param.calib.f = 707.0912; // focal length in pixels
-	param.calib.cu = 601.8873; // principal point (u-coordinate) in pixels
-	param.calib.cv = 183.1104; // principal point (v-coordinate) in pixels
-	param.base = 0.5372; // baseline in meters, = P1(1, 4)/f
-
-						 // init visual odometry
-	VisualOdometryStereo viso(param);
-
 	// current pose (this matrix transforms a point from the current
 	// frame's camera coordinates to the first frame's camera coordinates)
 	Matrix pose = Matrix::eye(4);
-	Matrix P(3, 4);
-	P.setVal(param.calib.f, 0, 0, 0, 0);
-	P.setVal(param.calib.f, 1, 1, 1, 1);
-	P.setVal(param.calib.cu, 0, 2, 0, 2);
-	P.setVal(param.calib.cv, 1, 2, 1, 2);
-	P.setVal(1, 2, 2, 2, 2);
+	char calibFileName[256];
+	sprintf(calibFileName, "/calib/%06d.txt", seqIdx);
+	Matrix P = getProjectionMatrix(dir + calibFileName, param);
+	// init visual odometry
+	VisualOdometryStereo viso(param);
+
 	cout << P << endl;
 	// loop through all frame 10 & 11
 	Mat disp;
@@ -45,17 +71,13 @@ int main(int argc, char** argv)
 	for (int32_t i = 0; i < 2; i++) {
 		// input file names
 		int frameIdx = i == 0 ? 10 : 11;
-		char base_name[256]; sprintf(base_name, "000000_%d.png", frameIdx);
-		string left_img_file_name = dir + "/colored_0/" + base_name;
-		string right_img_file_name = dir + "/colored_1/" + base_name;
+		char base_name[256]; sprintf(base_name, "%06d_%d.png", seqIdx, frameIdx);
+		string left_img_file_name	= dir + "/colored_0/" + base_name;
+		string right_img_file_name	= dir + "/colored_1/" + base_name;
 
 
 		// catch image read/write errors here
 		try {
-
-			// load left and right input image
-			//png::image< png::gray_pixel > left_img(left_img_file_name);
-			//png::image< png::gray_pixel > right_img(right_img_file_name);
 			cout << left_img_file_name << endl;
 			Mat left_img = imread(left_img_file_name, IMREAD_GRAYSCALE);
 			Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
@@ -78,10 +100,10 @@ int main(int argc, char** argv)
 				sgbm->compute(left_img, right_img, disp);
 			}
 			// image dimensions
-			width = left_img.cols;// left_img.get_width();
-			height = left_img.rows;// left_img.get_height();
+			width = left_img.cols;
+			height = left_img.rows;
 
-								   // convert input images to uint8_t buffer
+			// convert input images to uint8_t buffer
 			uint8_t* left_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
 			uint8_t* right_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
 			int32_t k = 0;
@@ -136,7 +158,7 @@ int main(int argc, char** argv)
 	Q.setVal(-param.calib.cv, 1, 3, 1, 3);
 	Q.setVal(param.calib.f, 2, 3, 2, 3);
 	Q.setVal(-1 / param.base, 3, 2, 3, 2);
-	cout << Q << endl;
+	//cout << Q << endl;
 	Mat flow(height, width, CV_16UC3);
 	for (int j = 0; j < height; j++) {
 		for (int i = 0; i < width; i++) {
@@ -185,12 +207,11 @@ int main(int argc, char** argv)
 			mv.val[2] = 64.0 * (xt1 - i) + 32768;
 			mv.val[1] = 64.0 * (yt1 - j) + 32768;
 			flow.at<Vec3w>(j, i) = mv;
-			//cout << est << endl;	
-
-
 		}
 	}
 
-	imwrite("flow.png", flow);
+	char flowName[256];
+	sprintf(flowName, "%06d_10.png", seqIdx);
+	imwrite(flowName, flow);
 	return 0;
 }
