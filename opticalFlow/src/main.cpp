@@ -151,14 +151,16 @@ int main(int argc, char** argv)
 
 	//get the predicted flow
 	Matrix Xt(4, 1);
-	Matrix Q(4, 4);
+	Matrix Q(4, 4); //triangular matrix
 	Q.setVal(1, 0, 0, 0, 0);
 	Q.setVal(1, 1, 1, 1, 1);
 	Q.setVal(-param.calib.cu, 0, 3, 0, 3);
 	Q.setVal(-param.calib.cv, 1, 3, 1, 3);
-	Q.setVal(param.calib.f, 2, 3, 2, 3);
+	Q.setVal(param.calib.f,   2, 3, 2, 3);
 	Q.setVal(-1 / param.base, 3, 2, 3, 2);
 	//cout << Q << endl;
+	double w;
+
 	Mat flow(height, width, CV_16UC3);
 	for (int j = 0; j < height; j++) {
 		for (int i = 0; i < width; i++) {
@@ -175,21 +177,12 @@ int main(int argc, char** argv)
 
 			Xt.setVal(i, 0, 0, 0, 0);
 			Xt.setVal(j, 1, 0, 1, 0);
-			Xt.setVal(dis, 2, 0, 2, 0);
+			Xt.setVal(-dis, 2, 0, 2, 0);
 			Xt.setVal(1, 3, 0, 3, 0);
 
 			Matrix recon = Q*Xt;
-			double w;
-			recon.getData(&w, 3, 0, 3, 0);
-			//cout << recon << endl;
-
-			if (w == 0)
-				continue;
-
-			recon = recon / w;
-			//cout << recon << endl;
-
-			Matrix Xt1 = pose * recon;
+		
+			Matrix Xt1 = viso.getMotion() * recon;
 			//cout << Xt1 << endl;
 
 			Matrix est = P*Xt1;
@@ -203,9 +196,9 @@ int main(int argc, char** argv)
 			est.getData(&xt1, 0, 0, 0, 0);
 			est.getData(&yt1, 1, 0, 1, 0);
 
-			mv.val[0] = 1;
-			mv.val[2] = 64.0 * (xt1 - i) + 32768;
-			mv.val[1] = 64.0 * (yt1 - j) + 32768;
+			mv.val[0] = 1;//b
+			mv.val[2] = 64.0 * (xt1 - i) + 32768; //r
+			mv.val[1] = 64.0 * (yt1 - j) + 32768; //g
 			flow.at<Vec3w>(j, i) = mv;
 		}
 	}
