@@ -7,8 +7,11 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/calib3d.hpp>
+#include <opencv2/ximgproc.hpp>
+#include "opencv2/core/utility.hpp"
+#include "opencv2/imgproc.hpp"
 
-
+using namespace cv::ximgproc;
 using namespace std;
 using namespace cv;
 
@@ -41,6 +44,11 @@ Matrix getProjectionMatrix(string calibFileName, VisualOdometryStereo::parameter
 
 	return P;
 }
+typedef struct {
+	ushort valid;
+	ushort mvy;
+	ushort mvx;
+} FlowPix;
 
 int main(int argc, char** argv)
 {
@@ -83,14 +91,49 @@ int main(int argc, char** argv)
 			Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
 			//estimate the disparity map
 			if (i == 0) {
+				int max_disp = 128;
+#if 0 
+				Mat left_for_matcher, right_for_matcher;
+				Mat left_disp, right_disp;
+				Mat filtered_disp;
+				
+				int wsize = 7;
+				max_disp /= 2;
+				if (max_disp % 16 != 0)
+					max_disp += 16 - (max_disp % 16);
+				resize(left_img, left_for_matcher, Size(), 0.5, 0.5);
+				resize(right_img, right_for_matcher, Size(), 0.5, 0.5);
+
+				Ptr<StereoBM> left_matcher = StereoBM::create(max_disp, wsize);
+				Ptr<DisparityWLSFilter> wls_filter = createDisparityWLSFilter(left_matcher);
+				Ptr<StereoMatcher> right_matcher = createRightMatcher(left_matcher);
+
+				//cvtColor(left_for_matcher, left_for_matcher, COLOR_BGR2GRAY);
+				//cvtColor(right_for_matcher, right_for_matcher, COLOR_BGR2GRAY);
+
+				double matching_time = (double)getTickCount();
+				left_matcher->compute(left_for_matcher, right_for_matcher, left_disp);
+				right_matcher->compute(right_for_matcher, left_for_matcher, right_disp);
+				matching_time = ((double)getTickCount() - matching_time) / getTickFrequency();
+
+				double lambda = 10;
+				double sigma = 5;
+				wls_filter->setLambda(lambda);
+				wls_filter->setSigmaColor(sigma);
+	
+				wls_filter->filter(left_disp, left_img, disp, right_disp);
+				Mat disp8;
+				disp.convertTo(disp8, CV_8U, 1/16.0);
+				imwrite("disp.png", disp8);
+#else
 				int sgbmWinSize = 7;
-				int numberOfDisparities = 128;
-				Ptr<StereoSGBM> sgbm = StereoSGBM::create(0, numberOfDisparities, sgbmWinSize);
+
+				Ptr<StereoSGBM> sgbm = StereoSGBM::create(0, max_disp, sgbmWinSize);
 
 				sgbm->setP1(8 * sgbmWinSize*sgbmWinSize);
 				sgbm->setP2(32 * sgbmWinSize*sgbmWinSize);
 				sgbm->setMinDisparity(0);
-				sgbm->setNumDisparities(numberOfDisparities);
+				sgbm->setNumDisparities(max_disp);
 				sgbm->setUniquenessRatio(10);
 				sgbm->setSpeckleWindowSize(100);
 				sgbm->setSpeckleRange(32);
@@ -98,6 +141,7 @@ int main(int argc, char** argv)
 				sgbm->setMode(StereoSGBM::MODE_HH);
 
 				sgbm->compute(left_img, right_img, disp);
+#endif
 			}
 			// image dimensions
 			width = left_img.cols;
@@ -151,39 +195,34 @@ int main(int argc, char** argv)
 
 	//get the predicted flow
 	Matrix Xt(4, 1);
-	Matrix Q(4, 4); //triangular matrix
-	Q.setVal(1, 0, 0, 0, 0);
-	Q.setVal(1, 1, 1, 1, 1);
-	Q.setVal(-param.calib.cu, 0, 3, 0, 3);
-	Q.setVal(-param.calib.cv, 1, 3, 1, 3);
-	Q.setVal(param.calib.f,   2, 3, 2, 3);
-	Q.setVal(-1 / param.base, 3, 2, 3, 2);
+	double qDat[4][4] = { 0 };
+	qDat[0][0] = qDat[1][1] = 1;
+	qDat[0][3] = -param.calib.cu;
+	qDat[1][3] = -param.calib.cv;
+	qDat[2][3] = param.calib.f;
+	qDat[3][2] = -1 / param.base;
+	Matrix Q(4, 4, &qDat[0][0]);//triangular matrix
+
 	//cout << Q << endl;
 	double w;
 
-	Mat flow(height, width, CV_16UC3);
+	FlowPix* flowDat = new FlowPix[height*width];
+	memset(flowDat, 0, sizeof(FlowPix)*width*height);
+	
+	double xtVal[4];
 	for (int j = 0; j < height; j++) {
+		short * ptrDisp = disp.ptr<short>(j);
 		for (int i = 0; i < width; i++) {
-			double dis = disp.at<short>(j, i) / 16.0;
-			Vec3w mv;
-			mv.val[0] = 0; //b
-			mv.val[1] = 0; //g
-			mv.val[2] = 0; //r
-			flow.at<Vec3w>(j, i) = mv;
-
+			double dis = ptrDisp[i] / 16.0;
+			
 			if (dis < 0) {
 				continue;
 			}
 
-			Xt.setVal(i, 0, 0, 0, 0);
-			Xt.setVal(j, 1, 0, 1, 0);
-			Xt.setVal(-dis, 2, 0, 2, 0);
-			Xt.setVal(1, 3, 0, 3, 0);
-
+			xtVal[0] = i; xtVal[1] = j; xtVal[2] = -dis; xtVal[3] = 1;
+			Matrix Xt(4, 1, xtVal);
 			Matrix recon = Q*Xt;
-		
 			Matrix Xt1 = viso.getMotion() * recon;
-			//cout << Xt1 << endl;
 
 			Matrix est = P*Xt1;
 			est.getData(&w, 2, 0, 2, 0);
@@ -196,15 +235,16 @@ int main(int argc, char** argv)
 			est.getData(&xt1, 0, 0, 0, 0);
 			est.getData(&yt1, 1, 0, 1, 0);
 
-			mv.val[0] = 1;//b
-			mv.val[2] = 64.0 * (xt1 - i) + 32768; //r
-			mv.val[1] = 64.0 * (yt1 - j) + 32768; //g
-			flow.at<Vec3w>(j, i) = mv;
+			flowDat[j*width + i].valid = 1;
+			flowDat[j*width + i].mvx = 64.0 * (xt1 - i) + 32768;
+			flowDat[j*width + i].mvy = 64.0 * (yt1 - j) + 32768;
+
 		}
 	}
-
+	Mat flow(height, width, CV_16UC3, flowDat);
 	char flowName[256];
 	sprintf(flowName, "%06d_10.png", seqIdx);
 	imwrite(flowName, flow);
+	delete[] flowDat;
 	return 0;
 }
