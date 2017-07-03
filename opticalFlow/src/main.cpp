@@ -10,8 +10,10 @@
 #include <opencv2/ximgproc.hpp>
 #include "opencv2/core/utility.hpp"
 #include "opencv2/imgproc.hpp"
+#include "opencv2/optflow.hpp"
 
 using namespace cv::ximgproc;
+using namespace cv::optflow;
 using namespace std;
 using namespace cv;
 
@@ -50,6 +52,47 @@ typedef struct {
 	ushort mvx;
 } FlowPix;
 
+inline void hsvToRgb(float h, float s, float v, float &r, float &g, float &b) {
+	float c = v*s;
+	float h2 = 6.0*h;
+	float x = c*(1.0 - fabs(fmod(h2, 2.0) - 1.0));
+	if (0 <= h2&&h2<1) { r = c; g = x; b = 0; }
+	else if (1 <= h2&&h2<2) { r = x; g = c; b = 0; }
+	else if (2 <= h2&&h2<3) { r = 0; g = c; b = x; }
+	else if (3 <= h2&&h2<4) { r = 0; g = x; b = c; }
+	else if (4 <= h2&&h2<5) { r = x; g = 0; b = c; }
+	else if (5 <= h2&&h2 <= 6) { r = c; g = 0; b = x; }
+	else if (h2>6) { r = 1; g = 0; b = 0; }
+	else if (h2<0) { r = 0; g = 1; b = 0; }
+}
+void writeFalseColor(Mat& flow, const char* fileName, float max_flow = 128)
+{
+	float n = 8; // multiplier
+	int m_height = flow.rows;
+	int m_width = flow.cols;
+	Mat image(m_height, m_width, CV_8UC3);
+	for (int32_t y = 0; y<m_height; y++) {
+		for (int32_t x = 0; x<m_width; x++) {
+			float r = 0, g = 0, b = 0;
+			float mvx = flow.at<Vec2f>(y, x).val[0];
+			float mvy = flow.at<Vec2f>(y, x).val[1];
+			//cout << mvx << mvy << endl;
+			float mag = sqrt(mvx*mvx + mvy*mvy);
+			float dir = atan2(mvy, mvx);
+			float h = fmod(dir / (2.0*3.1415926) + 1.0, 1.0);
+			float s = std::min(std::max(mag*n / max_flow, 0.0f), 1.0f);
+			float v = std::min(std::max(n - s, 0.0f), 1.0f);
+			hsvToRgb(h, s, v, r, g, b);
+			//cout << r <<", "<< g <<", "<< b << endl;
+			image.at<Vec3b>(y, x) = Vec3b(b*255.0f, g*255.0f, r*255.0f);
+		}
+	}
+
+	imwrite(fileName, image);
+
+}
+
+
 int main(int argc, char** argv)
 {
 	if (argc < 3) {
@@ -72,10 +115,14 @@ int main(int argc, char** argv)
 	// init visual odometry
 	VisualOdometryStereo viso(param);
 
-	cout << P << endl;
+	//cout << P << endl;
 	// loop through all frame 10 & 11
 	Mat disp;
 	int width, height;
+	uint8_t* left_img_data = NULL;
+	uint8_t* right_img_data = NULL;
+	uchar* Ipred = NULL; 
+	Mat It;
 	for (int32_t i = 0; i < 2; i++) {
 		// input file names
 		int frameIdx = i == 0 ? 10 : 11;
@@ -83,11 +130,13 @@ int main(int argc, char** argv)
 		string left_img_file_name	= dir + "/colored_0/" + base_name;
 		string right_img_file_name	= dir + "/colored_1/" + base_name;
 
-
+		
 		// catch image read/write errors here
 		try {
 			cout << left_img_file_name << endl;
 			Mat left_img = imread(left_img_file_name, IMREAD_GRAYSCALE);
+			if (i == 0)
+				It = left_img;
 			Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
 			//estimate the disparity map
 			if (i == 0) {
@@ -134,10 +183,10 @@ int main(int argc, char** argv)
 				sgbm->setP2(32 * sgbmWinSize*sgbmWinSize);
 				sgbm->setMinDisparity(0);
 				sgbm->setNumDisparities(max_disp);
-				sgbm->setUniquenessRatio(10);
-				sgbm->setSpeckleWindowSize(100);
+				sgbm->setUniquenessRatio(0);
+				sgbm->setSpeckleWindowSize(0);
 				sgbm->setSpeckleRange(32);
-				sgbm->setDisp12MaxDiff(2);
+				sgbm->setDisp12MaxDiff(1000);
 				sgbm->setMode(StereoSGBM::MODE_HH);
 
 				sgbm->compute(left_img, right_img, disp);
@@ -148,13 +197,20 @@ int main(int argc, char** argv)
 			height = left_img.rows;
 
 			// convert input images to uint8_t buffer
-			uint8_t* left_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
-			uint8_t* right_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
+			if (left_img_data == NULL || right_img_data == NULL || Ipred == NULL) {
+				left_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
+				right_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
+				Ipred = new uchar[width*height];
+			}
 			int32_t k = 0;
 			for (int32_t v = 0; v<height; v++) {
+				uchar* leftPtr = left_img.ptr<uchar>(v);
+				uchar* rightPtr = right_img.ptr<uchar>(v);
 				for (int32_t u = 0; u<width; u++) {
-					left_img_data[k] = left_img.at<uchar>(v, u);// left_img.get_pixel(u, v);
-					right_img_data[k] = right_img.at<uchar>(v, u);// right_img.get_pixel(u, v);
+					left_img_data[k] = leftPtr[u];
+					right_img_data[k] = rightPtr[u];
+					if (i == 0)
+						Ipred[k] = left_img_data[k];
 					k++;
 				}
 			}
@@ -180,9 +236,6 @@ int main(int argc, char** argv)
 				cout << " ... failed!" << endl;
 			}
 
-			// release uint8_t buffers
-			free(left_img_data);
-			free(right_img_data);
 
 			// catch image read errors here
 		}
@@ -210,13 +263,23 @@ int main(int argc, char** argv)
 	memset(flowDat, 0, sizeof(FlowPix)*width*height);
 	
 	double xtVal[4];
+	
+	//memset(Ipred, 0, sizeof(uchar)*width*height);
+	memcpy(Ipred, left_img_data, sizeof(uchar)*width*height);
+	uchar* hasValidPixel = new uchar[width*height];
+	memset(hasValidPixel, 0, sizeof(uchar)*width*height);
+
 	for (int j = 0; j < height; j++) {
 		short * ptrDisp = disp.ptr<short>(j);
+		
 		for (int i = 0; i < width; i++) {
 			double dis = ptrDisp[i] / 16.0;
 			
 			if (dis < 0) {
-				continue;
+				
+				dis = ptrDisp[128] / 16.0;
+				if(dis<0)
+					continue;
 			}
 
 			xtVal[0] = i; xtVal[1] = j; xtVal[2] = -dis; xtVal[3] = 1;
@@ -239,12 +302,65 @@ int main(int argc, char** argv)
 			flowDat[j*width + i].mvx = 64.0 * (xt1 - i) + 32768;
 			flowDat[j*width + i].mvy = 64.0 * (yt1 - j) + 32768;
 
+			int targetX = xt1 + 0.5;
+			int targetY = yt1 + 0.5;
+			if (targetX >= 0 && targetX < width && targetY >= 0 && targetY < height) {//get predicted pixel
+				Ipred[j*width + i] = left_img_data[targetY*width + targetX];
+				hasValidPixel[j*width + i] = 255;
+			}
 		}
 	}
+
+
+	char predImageName[256];
+	sprintf(predImageName, "%06d_10_pred.png", seqIdx);
+	Mat Ip(height, width, CV_8U, Ipred);
+
+
 	Mat flow(height, width, CV_16UC3, flowDat);
 	char flowName[256];
 	sprintf(flowName, "%06d_10.png", seqIdx);
 	imwrite(flowName, flow);
+
+	
+
+#if 1 
+	//correction stage
+	Mat flowC;
+	//calcOpticalFlowSparseToDense(It, Ip, flowC, 4, 128, 0.001);
+	calcOpticalFlowFarneback(It, Ip, flowC, 0.8, 1, 11, 1, 2, 1.5, 0);
+	writeFalseColor(flowC, "flowC.png", 10);
+	//u(x, y) = ?u(x, y) + upred(x + ?u(x, y), y + ?v(x, y))
+	for (int j = 0; j < height; j++) {
+		for (int i = 0; i < width; i++) {
+			Vec2f deltaFlow = flowC.at<Vec2f>(j, i);
+			if (hasValidPixel[j*width + i] > 0) {// && (abs(deltaFlow.val[0]) > 5 || abs(deltaFlow.val[1]) > 5)) { //have valid wrap pixel from It+1
+				int tx = i;
+				int ty = j;
+				//int tx = std::max(std::min(width - 1, int(i + deltaFlow.val[0] + 0.5)), 0);
+				//int ty = std::max(std::min(height - 1, int(j + deltaFlow.val[1] + 0.5)), 0);
+				
+				float mvx = (int(flowDat[ty*width + tx].mvx) - 32768) / 64.0;
+				float mvy = (int(flowDat[ty*width + tx].mvy) - 32768) / 64.0;
+				
+
+				flowDat[j*width + i].mvx = 64.0*(mvx + deltaFlow.val[0]) + 32768;
+				flowDat[j*width + i].mvy = 64.0*(mvy + deltaFlow.val[1]) + 32768;
+			}
+		}
+	}
+#endif
+	imwrite(predImageName, Ip);
+	imwrite("It.png", It);
+
+	sprintf(flowName, "%06d_10_c.png", seqIdx);
+	imwrite(flowName, flow);
+
 	delete[] flowDat;
+	// release uint8_t buffers
+	free(left_img_data);
+	free(right_img_data);
+	delete[] Ipred;
+
 	return 0;
 }
