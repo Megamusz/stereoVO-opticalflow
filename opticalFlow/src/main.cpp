@@ -2,96 +2,15 @@
 #include <string>
 #include <vector>
 #include <stdint.h>
-#include <fstream>
-#include <viso_stereo.h>
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/calib3d.hpp>
-#include <opencv2/ximgproc.hpp>
-#include "opencv2/core/utility.hpp"
-#include "opencv2/imgproc.hpp"
-#include "opencv2/optflow.hpp"
 
-using namespace cv::ximgproc;
-using namespace cv::optflow;
-using namespace std;
-using namespace cv;
 
-//get the project matrix from KITTI calibration file, as well as initialize the param for VOstereo
-Matrix getProjectionMatrix(string calibFileName, VisualOdometryStereo::parameters& param) {
-	ifstream f(calibFileName);
-	double *pDat = new double[4 * 3];
-	//string temp;
-	f >> string();
-	
-	for (int m = 0; m < 3; m++) {
-		for (int n = 0; n < 4; n++) {
-			f >> pDat[m * 4 + n];
-			//cout << pDat[m * 4 + n];
-		}
-	}
-	f >> string();
-	double baseFocal;
-	for (int i = 0; i < 4; i++)
-		f >> baseFocal;
+#include "utils.h"
 
-	Matrix P(3, 4, pDat);
-
-	param.calib.f = pDat[0];	// focal length in pixels
-	param.calib.cu = pDat[2];	// principal point (u-coordinate) in pixels
-	param.calib.cv = pDat[6];	// principal point (v-coordinate) in pixels
-	param.base = -baseFocal/param.calib.f; // baseline in meters, = P1(1, 4)/f
-
-	delete[] pDat;
-
-	return P;
-}
 typedef struct {
 	ushort valid;
 	ushort mvy;
 	ushort mvx;
 } FlowPix;
-
-inline void hsvToRgb(float h, float s, float v, float &r, float &g, float &b) {
-	float c = v*s;
-	float h2 = 6.0*h;
-	float x = c*(1.0 - fabs(fmod(h2, 2.0) - 1.0));
-	if (0 <= h2&&h2<1) { r = c; g = x; b = 0; }
-	else if (1 <= h2&&h2<2) { r = x; g = c; b = 0; }
-	else if (2 <= h2&&h2<3) { r = 0; g = c; b = x; }
-	else if (3 <= h2&&h2<4) { r = 0; g = x; b = c; }
-	else if (4 <= h2&&h2<5) { r = x; g = 0; b = c; }
-	else if (5 <= h2&&h2 <= 6) { r = c; g = 0; b = x; }
-	else if (h2>6) { r = 1; g = 0; b = 0; }
-	else if (h2<0) { r = 0; g = 1; b = 0; }
-}
-void writeFalseColor(Mat& flow, const char* fileName, float max_flow = 128)
-{
-	float n = 8; // multiplier
-	int m_height = flow.rows;
-	int m_width = flow.cols;
-	Mat image(m_height, m_width, CV_8UC3);
-	for (int32_t y = 0; y<m_height; y++) {
-		for (int32_t x = 0; x<m_width; x++) {
-			float r = 0, g = 0, b = 0;
-			float mvx = flow.at<Vec2f>(y, x).val[0];
-			float mvy = flow.at<Vec2f>(y, x).val[1];
-			//cout << mvx << mvy << endl;
-			float mag = sqrt(mvx*mvx + mvy*mvy);
-			float dir = atan2(mvy, mvx);
-			float h = fmod(dir / (2.0*3.1415926) + 1.0, 1.0);
-			float s = std::min(std::max(mag*n / max_flow, 0.0f), 1.0f);
-			float v = std::min(std::max(n - s, 0.0f), 1.0f);
-			hsvToRgb(h, s, v, r, g, b);
-			//cout << r <<", "<< g <<", "<< b << endl;
-			image.at<Vec3b>(y, x) = Vec3b(b*255.0f, g*255.0f, r*255.0f);
-		}
-	}
-
-	imwrite(fileName, image);
-
-}
-
 
 int main(int argc, char** argv)
 {
