@@ -12,6 +12,152 @@ typedef struct {
 	ushort mvx;
 } FlowPix;
 
+void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix& Rt, uchar* Ipred, uchar* left_img_data, FlowPix*& flowDat, uchar*& hasValidPixel)
+{
+	//cout << Q << endl;
+	double w;
+
+	flowDat = new FlowPix[height*width];
+	memset(flowDat, 0, sizeof(FlowPix)*width*height);
+
+	double xtVal[4];
+
+	//memset(Ipred, 0, sizeof(uchar)*width*height);
+	memcpy(Ipred, left_img_data, sizeof(uchar)*width*height);
+	hasValidPixel = new uchar[width*height];
+	memset(hasValidPixel, 0, sizeof(uchar)*width*height);
+
+	for (int j = 0; j < height; j++) {
+		short * ptrDisp = disp.ptr<short>(j);
+
+		for (int i = 0; i < width; i++) {
+			double dis = ptrDisp[i] / 16.0;
+
+			if (dis < 0) {
+
+				dis = ptrDisp[128] / 16.0;
+				if (dis<0)
+					continue;
+			}
+
+			xtVal[0] = i; xtVal[1] = j; xtVal[2] = -dis; xtVal[3] = 1;
+			Matrix Xt(4, 1, xtVal);
+			Matrix recon = Q*Xt;
+			Matrix Xt1 = Rt * recon;
+
+			Matrix est = P*Xt1;
+			est.getData(&w, 2, 0, 2, 0);
+			est = est / w;
+
+			if (w == 0)
+				continue;
+
+			double xt1, yt1;
+			est.getData(&xt1, 0, 0, 0, 0);
+			est.getData(&yt1, 1, 0, 1, 0);
+
+			flowDat[j*width + i].valid = 1;
+			flowDat[j*width + i].mvx = 64.0 * (xt1 - i) + 32768;
+			flowDat[j*width + i].mvy = 64.0 * (yt1 - j) + 32768;
+
+			int targetX = xt1 + 0.5;
+			int targetY = yt1 + 0.5;
+			if (targetX >= 0 && targetX < width && targetY >= 0 && targetY < height) {//get predicted pixel
+				Ipred[j*width + i] = left_img_data[targetY*width + targetX];
+				hasValidPixel[j*width + i] = 255;
+			}
+		}
+	}
+
+
+
+}
+
+Mat calculateDisparity(Mat& left_img, Mat& right_img)
+{
+	Mat disp;
+	int max_disp = 128;
+#if 0 
+	Mat left_for_matcher, right_for_matcher;
+	Mat left_disp, right_disp;
+	Mat filtered_disp;
+
+	int wsize = 7;
+	max_disp /= 2;
+	if (max_disp % 16 != 0)
+		max_disp += 16 - (max_disp % 16);
+	resize(left_img, left_for_matcher, Size(), 0.5, 0.5);
+	resize(right_img, right_for_matcher, Size(), 0.5, 0.5);
+
+	Ptr<StereoBM> left_matcher = StereoBM::create(max_disp, wsize);
+	Ptr<DisparityWLSFilter> wls_filter = createDisparityWLSFilter(left_matcher);
+	Ptr<StereoMatcher> right_matcher = createRightMatcher(left_matcher);
+
+	//cvtColor(left_for_matcher, left_for_matcher, COLOR_BGR2GRAY);
+	//cvtColor(right_for_matcher, right_for_matcher, COLOR_BGR2GRAY);
+
+	double matching_time = (double)getTickCount();
+	left_matcher->compute(left_for_matcher, right_for_matcher, left_disp);
+	right_matcher->compute(right_for_matcher, left_for_matcher, right_disp);
+	matching_time = ((double)getTickCount() - matching_time) / getTickFrequency();
+
+	double lambda = 10;
+	double sigma = 5;
+	wls_filter->setLambda(lambda);
+	wls_filter->setSigmaColor(sigma);
+
+	wls_filter->filter(left_disp, left_img, disp, right_disp);
+	Mat disp8;
+	disp.convertTo(disp8, CV_8U, 1 / 16.0);
+	imwrite("disp.png", disp8);
+#else
+	int sgbmWinSize = 7;
+
+	Ptr<StereoSGBM> sgbm = StereoSGBM::create(0, max_disp, sgbmWinSize);
+
+	sgbm->setP1(8 * sgbmWinSize*sgbmWinSize);
+	sgbm->setP2(32 * sgbmWinSize*sgbmWinSize);
+	sgbm->setMinDisparity(0);
+	sgbm->setNumDisparities(max_disp);
+	sgbm->setUniquenessRatio(0);
+	sgbm->setSpeckleWindowSize(0);
+	sgbm->setSpeckleRange(32);
+	sgbm->setDisp12MaxDiff(1000);
+	sgbm->setMode(StereoSGBM::MODE_HH);
+
+	sgbm->compute(left_img, right_img, disp);
+#endif
+	return disp;
+}
+
+void correctFlow(Mat& It, Mat& Ip, int width, int height, uchar* hasValidPixel, FlowPix* flowDat)
+{
+	//correction stage
+	Mat flowC;
+	//calcOpticalFlowSparseToDense(It, Ip, flowC, 4, 128, 0.001);
+	calcOpticalFlowFarneback(It, Ip, flowC, 0.8, 1, 11, 1, 2, 1.5, 0);
+	writeFalseColor(flowC, "flowC.png", 10);
+	//u(x, y) = ?u(x, y) + upred(x + ?u(x, y), y + ?v(x, y))
+	for (int j = 0; j < height; j++) {
+		for (int i = 0; i < width; i++) {
+			Vec2f deltaFlow = flowC.at<Vec2f>(j, i);
+			if (hasValidPixel[j*width + i] > 0) {// && (abs(deltaFlow.val[0]) > 5 || abs(deltaFlow.val[1]) > 5)) { //have valid wrap pixel from It+1
+				int tx = i;
+				int ty = j;
+				//int tx = std::max(std::min(width - 1, int(i + deltaFlow.val[0] + 0.5)), 0);
+				//int ty = std::max(std::min(height - 1, int(j + deltaFlow.val[1] + 0.5)), 0);
+
+				float mvx = (int(flowDat[ty*width + tx].mvx) - 32768) / 64.0;
+				float mvy = (int(flowDat[ty*width + tx].mvy) - 32768) / 64.0;
+
+
+				flowDat[j*width + i].mvx = 64.0*(mvx + deltaFlow.val[0]) + 32768;
+				flowDat[j*width + i].mvy = 64.0*(mvy + deltaFlow.val[1]) + 32768;
+			}
+		}
+	}
+}
+
 int main(int argc, char** argv)
 {
 	if (argc < 3) {
@@ -59,57 +205,7 @@ int main(int argc, char** argv)
 			Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
 			//estimate the disparity map
 			if (i == 0) {
-				int max_disp = 128;
-#if 0 
-				Mat left_for_matcher, right_for_matcher;
-				Mat left_disp, right_disp;
-				Mat filtered_disp;
-				
-				int wsize = 7;
-				max_disp /= 2;
-				if (max_disp % 16 != 0)
-					max_disp += 16 - (max_disp % 16);
-				resize(left_img, left_for_matcher, Size(), 0.5, 0.5);
-				resize(right_img, right_for_matcher, Size(), 0.5, 0.5);
-
-				Ptr<StereoBM> left_matcher = StereoBM::create(max_disp, wsize);
-				Ptr<DisparityWLSFilter> wls_filter = createDisparityWLSFilter(left_matcher);
-				Ptr<StereoMatcher> right_matcher = createRightMatcher(left_matcher);
-
-				//cvtColor(left_for_matcher, left_for_matcher, COLOR_BGR2GRAY);
-				//cvtColor(right_for_matcher, right_for_matcher, COLOR_BGR2GRAY);
-
-				double matching_time = (double)getTickCount();
-				left_matcher->compute(left_for_matcher, right_for_matcher, left_disp);
-				right_matcher->compute(right_for_matcher, left_for_matcher, right_disp);
-				matching_time = ((double)getTickCount() - matching_time) / getTickFrequency();
-
-				double lambda = 10;
-				double sigma = 5;
-				wls_filter->setLambda(lambda);
-				wls_filter->setSigmaColor(sigma);
-	
-				wls_filter->filter(left_disp, left_img, disp, right_disp);
-				Mat disp8;
-				disp.convertTo(disp8, CV_8U, 1/16.0);
-				imwrite("disp.png", disp8);
-#else
-				int sgbmWinSize = 7;
-
-				Ptr<StereoSGBM> sgbm = StereoSGBM::create(0, max_disp, sgbmWinSize);
-
-				sgbm->setP1(8 * sgbmWinSize*sgbmWinSize);
-				sgbm->setP2(32 * sgbmWinSize*sgbmWinSize);
-				sgbm->setMinDisparity(0);
-				sgbm->setNumDisparities(max_disp);
-				sgbm->setUniquenessRatio(0);
-				sgbm->setSpeckleWindowSize(0);
-				sgbm->setSpeckleRange(32);
-				sgbm->setDisp12MaxDiff(1000);
-				sgbm->setMode(StereoSGBM::MODE_HH);
-
-				sgbm->compute(left_img, right_img, disp);
-#endif
+				disp = calculateDisparity(left_img, right_img);
 			}
 			// image dimensions
 			width = left_img.cols;
@@ -174,62 +270,11 @@ int main(int argc, char** argv)
 	qDat[2][3] = param.calib.f;
 	qDat[3][2] = -1 / param.base;
 	Matrix Q(4, 4, &qDat[0][0]);//triangular matrix
-
-	//cout << Q << endl;
-	double w;
-
-	FlowPix* flowDat = new FlowPix[height*width];
-	memset(flowDat, 0, sizeof(FlowPix)*width*height);
 	
-	double xtVal[4];
-	
-	//memset(Ipred, 0, sizeof(uchar)*width*height);
-	memcpy(Ipred, left_img_data, sizeof(uchar)*width*height);
-	uchar* hasValidPixel = new uchar[width*height];
-	memset(hasValidPixel, 0, sizeof(uchar)*width*height);
+	FlowPix* flowDat;
+	uchar* hasValidPixel;
 
-	for (int j = 0; j < height; j++) {
-		short * ptrDisp = disp.ptr<short>(j);
-		
-		for (int i = 0; i < width; i++) {
-			double dis = ptrDisp[i] / 16.0;
-			
-			if (dis < 0) {
-				
-				dis = ptrDisp[128] / 16.0;
-				if(dis<0)
-					continue;
-			}
-
-			xtVal[0] = i; xtVal[1] = j; xtVal[2] = -dis; xtVal[3] = 1;
-			Matrix Xt(4, 1, xtVal);
-			Matrix recon = Q*Xt;
-			Matrix Xt1 = viso.getMotion() * recon;
-
-			Matrix est = P*Xt1;
-			est.getData(&w, 2, 0, 2, 0);
-			est = est / w;
-
-			if (w == 0)
-				continue;
-
-			double xt1, yt1;
-			est.getData(&xt1, 0, 0, 0, 0);
-			est.getData(&yt1, 1, 0, 1, 0);
-
-			flowDat[j*width + i].valid = 1;
-			flowDat[j*width + i].mvx = 64.0 * (xt1 - i) + 32768;
-			flowDat[j*width + i].mvy = 64.0 * (yt1 - j) + 32768;
-
-			int targetX = xt1 + 0.5;
-			int targetY = yt1 + 0.5;
-			if (targetX >= 0 && targetX < width && targetY >= 0 && targetY < height) {//get predicted pixel
-				Ipred[j*width + i] = left_img_data[targetY*width + targetX];
-				hasValidPixel[j*width + i] = 255;
-			}
-		}
-	}
-
+	predictFlow(disp, width, height, Q, P, viso.getMotion(), Ipred, left_img_data, flowDat, hasValidPixel);
 
 	char predImageName[256];
 	sprintf(predImageName, "%06d_10_pred.png", seqIdx);
@@ -241,33 +286,8 @@ int main(int argc, char** argv)
 	sprintf(flowName, "%06d_10.png", seqIdx);
 	imwrite(flowName, flow);
 
-	
-
 #if 1 
-	//correction stage
-	Mat flowC;
-	//calcOpticalFlowSparseToDense(It, Ip, flowC, 4, 128, 0.001);
-	calcOpticalFlowFarneback(It, Ip, flowC, 0.8, 1, 11, 1, 2, 1.5, 0);
-	writeFalseColor(flowC, "flowC.png", 10);
-	//u(x, y) = ?u(x, y) + upred(x + ?u(x, y), y + ?v(x, y))
-	for (int j = 0; j < height; j++) {
-		for (int i = 0; i < width; i++) {
-			Vec2f deltaFlow = flowC.at<Vec2f>(j, i);
-			if (hasValidPixel[j*width + i] > 0) {// && (abs(deltaFlow.val[0]) > 5 || abs(deltaFlow.val[1]) > 5)) { //have valid wrap pixel from It+1
-				int tx = i;
-				int ty = j;
-				//int tx = std::max(std::min(width - 1, int(i + deltaFlow.val[0] + 0.5)), 0);
-				//int ty = std::max(std::min(height - 1, int(j + deltaFlow.val[1] + 0.5)), 0);
-				
-				float mvx = (int(flowDat[ty*width + tx].mvx) - 32768) / 64.0;
-				float mvy = (int(flowDat[ty*width + tx].mvy) - 32768) / 64.0;
-				
-
-				flowDat[j*width + i].mvx = 64.0*(mvx + deltaFlow.val[0]) + 32768;
-				flowDat[j*width + i].mvy = 64.0*(mvy + deltaFlow.val[1]) + 32768;
-			}
-		}
-	}
+	correctFlow(It, Ip, width, height, hasValidPixel, flowDat);
 #endif
 	imwrite(predImageName, Ip);
 	imwrite("It.png", It);
@@ -280,6 +300,9 @@ int main(int argc, char** argv)
 	free(left_img_data);
 	free(right_img_data);
 	delete[] Ipred;
+	delete[] hasValidPixel;
 
 	return 0;
 }
+
+
