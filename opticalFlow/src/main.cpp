@@ -73,6 +73,69 @@ void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix&
 
 }
 
+//Kitti's infilling method
+void infilling(Mat& disp) {
+	int width_ = disp.cols;
+	int height_ = disp.rows;
+	
+	// for each row do
+	for (int32_t v = 0; v<height_; v++) {
+
+		// init counter
+		int32_t count = 0;
+		short* ptr = disp.ptr<short>(v);
+		// for each pixel do
+		for (int32_t u = 0; u<width_; u++) {
+
+			// if disparity valid
+			if (ptr[u]>0) {
+
+				// at least one pixel requires interpolation
+				if (count >= 1) {
+
+					// first and last value for interpolation
+					int32_t u1 = u - count;
+					int32_t u2 = u - 1;
+
+					// set pixel to min disparity
+					if (u1>0 && u2<width_ - 1) {
+						float d_ipol = std::min(ptr[u1 - 1], ptr[u2 + 1]);
+						for (int32_t u_curr = u1; u_curr <= u2; u_curr++)
+							ptr[u_curr] = d_ipol;
+					}
+				}
+
+				// reset counter
+				count = 0;
+
+				// otherwise increment counter
+			}
+			else {
+				count++;
+			}
+		}
+
+		// extrapolate to the left
+		for (int32_t u = 0; u<width_; u++) {
+			if (ptr[u]>0) {
+				for (int32_t u2 = 0; u2<u; u2++)
+					ptr[u2] = ptr[u];
+				break;
+			}
+		}
+
+		// extrapolate to the right
+		for (int32_t u = width_ - 1; u >= 0; u--) {
+			if (ptr[u]>0) {
+				for (int32_t u2 = u + 1; u2 <= width_ - 1; u2++)
+					ptr[u2] = ptr[u];
+				break;
+			}
+		}
+	}
+
+}
+
 Mat calculateDisparity(Mat& left_img, Mat& right_img)
 {
 	Mat disp;
@@ -119,14 +182,16 @@ Mat calculateDisparity(Mat& left_img, Mat& right_img)
 	sgbm->setP2(32 * sgbmWinSize*sgbmWinSize);
 	sgbm->setMinDisparity(0);
 	sgbm->setNumDisparities(max_disp);
-	sgbm->setUniquenessRatio(0);
+	sgbm->setUniquenessRatio(10);
 	sgbm->setSpeckleWindowSize(0);
 	sgbm->setSpeckleRange(32);
-	sgbm->setDisp12MaxDiff(1000);
+	sgbm->setDisp12MaxDiff(3);
 	sgbm->setMode(StereoSGBM::MODE_HH);
 
 	sgbm->compute(left_img, right_img, disp);
 #endif
+
+	infilling(disp);
 	return disp;
 }
 
