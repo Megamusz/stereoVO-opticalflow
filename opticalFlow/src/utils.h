@@ -12,6 +12,7 @@ using namespace cv::ximgproc;
 using namespace cv::optflow;
 using namespace std;
 using namespace cv;
+Mat readKITTIFlow(String flowName);
 
 inline void hsvToRgb(float h, float s, float v, float &r, float &g, float &b) {
 	float c = v*s;

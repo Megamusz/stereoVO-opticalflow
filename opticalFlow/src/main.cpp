@@ -222,7 +222,31 @@ void correctFlow(Mat& It, Mat& Ip, int width, int height, uchar* hasValidPixel, 
 		}
 	}
 }
+void correctFlowNVENC(int seqIdx, int width, int height, uchar* hasValidPixel, FlowPix* flowDat)
+{
+	char base_name[256]; sprintf(base_name, "%06d_10.png", seqIdx);
+	string fName = string("C:/Users/megamusz/Google Drive/NVENC correct/") + base_name;
+	Mat flowC = readKITTIFlow(fName);
 
+	for (int j = 0; j < height; j++) {
+		for (int i = 0; i < width; i++) {
+			Vec2f deltaFlow = flowC.at<Vec2f>(j, i);
+			if (hasValidPixel[j*width + i] > 0) {// && (abs(deltaFlow.val[0]) > 5 || abs(deltaFlow.val[1]) > 5)) { //have valid wrap pixel from It+1
+				int tx = i;
+				int ty = j;
+				//int tx = std::max(std::min(width - 1, int(i + deltaFlow.val[0] + 0.5)), 0);
+				//int ty = std::max(std::min(height - 1, int(j + deltaFlow.val[1] + 0.5)), 0);
+
+				float mvx = (int(flowDat[ty*width + tx].mvx) - 32768) / 64.0;
+				float mvy = (int(flowDat[ty*width + tx].mvy) - 32768) / 64.0;
+
+
+				flowDat[j*width + i].mvx = 64.0*(mvx + deltaFlow.val[0]) + 32768;
+				flowDat[j*width + i].mvy = 64.0*(mvy + deltaFlow.val[1]) + 32768;
+			}
+		}
+	}
+}
 int main(int argc, char** argv)
 {
 	if (argc < 3) {
@@ -270,7 +294,20 @@ int main(int argc, char** argv)
 			Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
 			//estimate the disparity map
 			if (i == 0) {
+#if 0 //calculate the disparity using opencvSGM 
 				disp = calculateDisparity(left_img, right_img);
+#else 
+#if 0 //use GT
+				string dispName =  dir + "/disp_occ/" + base_name;
+#else //use NVENC disparity
+				string dispName = string("C:/Users/megamusz/Google Drive/NVENC + Costereo/") + base_name;
+#endif
+				disp = imread(dispName, -1);
+				//infilling(disp);
+				//the disparity of KITTI format is Ux.8, the format from opencv sgbm is Sx.4, so multiplied by 1/16.0 to convert to openCV's format
+				disp.convertTo(disp, CV_16S, 1 / 16.0);
+				
+#endif
 			}
 			// image dimensions
 			width = left_img.cols;
@@ -351,11 +388,40 @@ int main(int argc, char** argv)
 	sprintf(flowName, "%06d_10.png", seqIdx);
 	imwrite(flowName, flow);
 
-#if 1 
+#if 0 //correct flow using Opencv farneback
 	correctFlow(It, Ip, width, height, hasValidPixel, flowDat);
+#else //correct flow using NVENC (offline)
+	correctFlowNVENC(seqIdx, width, height, hasValidPixel, flowDat);
 #endif
-	imwrite(predImageName, Ip);
-	imwrite("It.png", It);
+	 
+#if 0 //generate the warp yuv for nvenc
+	{
+		char yuvfileName[256];
+		int w1 = int((width + 15) / 16) * 16;
+		int h1 = int((height + 15) / 16) * 16;
+	
+		sprintf(yuvfileName, "%06d_%dx%d.yuv", seqIdx, w1, h1);
+		ofstream yuvStream(yuvfileName, ios::binary);
+		Mat dst;
+		copyMakeBorder(It, dst, 0, h1-height, 0, w1-width, BORDER_REPLICATE);
+		char* uv = new char[w1*h1 / 2];
+		memset(uv, 128, w1*h1 / 2);
+		if (dst.isContinuous()) {
+			yuvStream.write((char*)dst.ptr<uchar>(0), w1*h1);
+			yuvStream.write(uv, w1*h1/2);
+		}
+		
+		copyMakeBorder(Ip, dst, 0, h1 - height, 0, w1 - width, BORDER_REPLICATE);
+		if (dst.isContinuous()) {
+			yuvStream.write((char*)dst.ptr<uchar>(0), w1*h1);
+			yuvStream.write(uv, w1*h1 / 2);
+		}
+		yuvStream.close();
+		delete[] uv;
+		
+		imwrite("It.png", It);
+	}
+#endif
 
 	sprintf(flowName, "%06d_10_c.png", seqIdx);
 	imwrite(flowName, flow);
