@@ -5,6 +5,7 @@
 
 
 #include "utils.h"
+#define KITTI2015
 
 typedef struct {
 	ushort valid;
@@ -23,7 +24,7 @@ void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix&
 	double xtVal[4];
 
 	//memset(Ipred, 0, sizeof(uchar)*width*height);
-	memcpy(Ipred, left_img_data, sizeof(uchar)*width*height);
+	//memcpy(Ipred, left_img_data, sizeof(uchar)*width*height);
 	hasValidPixel = new uchar[width*height];
 	memset(hasValidPixel, 0, sizeof(uchar)*width*height);
 
@@ -60,10 +61,23 @@ void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix&
 			flowDat[j*width + i].mvx = 64.0 * (xt1 - i) + 32768;
 			flowDat[j*width + i].mvy = 64.0 * (yt1 - j) + 32768;
 
-			int targetX = xt1 + 0.5;
-			int targetY = yt1 + 0.5;
-			if (targetX >= 0 && targetX < width && targetY >= 0 && targetY < height) {//get predicted pixel
-				Ipred[j*width + i] = left_img_data[targetY*width + targetX];
+
+			if (xt1 > 0 && xt1 < width && yt1 > 0 && yt1 < height) {//get predicted pixel
+				int x0 = int(xt1); int y0 = int(yt1);
+				
+				int x1 = min(width - 1, x0 + 1);
+				int y1 = min(height - 1, y0 + 1);
+
+				uchar I0 = left_img_data[y0*width + x0];
+				uchar I1 = left_img_data[y0*width + x1];
+				uchar I2 = left_img_data[y1*width + x0];
+				uchar I3 = left_img_data[y1*width + x1];
+
+				double Ip1 = (1 - xt1 + x0)*I0 + (xt1 - x0)*I1;
+				double Ip2 = (1 - xt1 + x0)*I2 + (xt1 - x0)*I3;
+				uchar Ip = (1 - yt1 + y0)*Ip1 + (yt1 - y0)*Ip2;
+
+				Ipred[j*width + i] = Ip;
 				hasValidPixel[j*width + i] = 255;
 			}
 		}
@@ -199,8 +213,8 @@ void correctFlow(Mat& It, Mat& Ip, int width, int height, uchar* hasValidPixel, 
 {
 	//correction stage
 	Mat flowC;
-	//calcOpticalFlowSparseToDense(It, Ip, flowC, 4, 128, 0.001);
-	calcOpticalFlowFarneback(It, Ip, flowC, 0.8, 1, 11, 1, 2, 1.5, 0);
+	calcOpticalFlowSparseToDense(It, Ip, flowC, 4, 128, 0.001);
+	//calcOpticalFlowFarneback(It, Ip, flowC, 0.8, 1, 11, 1, 2, 1.5, 0);
 	writeFalseColor(flowC, "flowC.png", 10);
 	//u(x, y) = ?u(x, y) + upred(x + ?u(x, y), y + ?v(x, y))
 	for (int j = 0; j < height; j++) {
@@ -225,13 +239,13 @@ void correctFlow(Mat& It, Mat& Ip, int width, int height, uchar* hasValidPixel, 
 void correctFlowNVENC(int seqIdx, int width, int height, uchar* hasValidPixel, FlowPix* flowDat)
 {
 	char base_name[256]; sprintf(base_name, "%06d_10.png", seqIdx);
-	string fName = string("C:/Users/megamusz/Google Drive/NVENC correct/") + base_name;
+	string fName = string("C:/Users/megamusz/Google Drive/NVENC_correctpyd_pp/") + base_name;
 	Mat flowC = readKITTIFlow(fName);
 
 	for (int j = 0; j < height; j++) {
 		for (int i = 0; i < width; i++) {
 			Vec2f deltaFlow = flowC.at<Vec2f>(j, i);
-			if (hasValidPixel[j*width + i] > 0) {// && (abs(deltaFlow.val[0]) > 5 || abs(deltaFlow.val[1]) > 5)) { //have valid wrap pixel from It+1
+			//if (hasValidPixel[j*width + i] > 0) {// && (abs(deltaFlow.val[0]) > 5 || abs(deltaFlow.val[1]) > 5)) { //have valid wrap pixel from It+1
 				int tx = i;
 				int ty = j;
 				//int tx = std::max(std::min(width - 1, int(i + deltaFlow.val[0] + 0.5)), 0);
@@ -243,7 +257,7 @@ void correctFlowNVENC(int seqIdx, int width, int height, uchar* hasValidPixel, F
 
 				flowDat[j*width + i].mvx = 64.0*(mvx + deltaFlow.val[0]) + 32768;
 				flowDat[j*width + i].mvy = 64.0*(mvy + deltaFlow.val[1]) + 32768;
-			}
+			//}
 		}
 	}
 }
@@ -264,7 +278,12 @@ int main(int argc, char** argv)
 	// frame's camera coordinates to the first frame's camera coordinates)
 	Matrix pose = Matrix::eye(4);
 	char calibFileName[256];
+#ifdef KITTI2015
+	sprintf(calibFileName, "/calib_cam_to_cam/%06d.txt", seqIdx);
+	cout << calibFileName << endl;
+#else
 	sprintf(calibFileName, "/calib/%06d.txt", seqIdx);
+#endif
 	Matrix P = getProjectionMatrix(dir + calibFileName, param);
 	// init visual odometry
 	VisualOdometryStereo viso(param);
@@ -281,8 +300,14 @@ int main(int argc, char** argv)
 		// input file names
 		int frameIdx = i == 0 ? 10 : 11;
 		char base_name[256]; sprintf(base_name, "%06d_%d.png", seqIdx, frameIdx);
+
+#ifdef KITTI2015
+		string left_img_file_name = dir + "/image_2/" + base_name;
+		string right_img_file_name = dir + "/image_3/" + base_name;
+#else
 		string left_img_file_name	= dir + "/colored_0/" + base_name;
 		string right_img_file_name	= dir + "/colored_1/" + base_name;
+#endif
 
 		
 		// catch image read/write errors here
@@ -300,10 +325,16 @@ int main(int argc, char** argv)
 #if 0 //use GT
 				string dispName =  dir + "/disp_occ/" + base_name;
 #else //use NVENC disparity
+#ifdef KITTI2015
+				string dispName = string("C:/Users/megamusz/Google Drive/NVENC_stereo_kitti2015_Costereo/") + base_name;
+#else
 				string dispName = string("C:/Users/megamusz/Google Drive/NVENC + Costereo/") + base_name;
 #endif
+#endif
 				disp = imread(dispName, -1);
+#ifdef KITTI2015
 				//infilling(disp);
+#endif
 				//the disparity of KITTI format is Ux.8, the format from opencv sgbm is Sx.4, so multiplied by 1/16.0 to convert to openCV's format
 				disp.convertTo(disp, CV_16S, 1 / 16.0);
 				
@@ -381,7 +412,7 @@ int main(int argc, char** argv)
 	char predImageName[256];
 	sprintf(predImageName, "%06d_10_pred.png", seqIdx);
 	Mat Ip(height, width, CV_8U, Ipred);
-
+	imwrite(predImageName, Ip);
 
 	Mat flow(height, width, CV_16UC3, flowDat);
 	char flowName[256];
@@ -393,7 +424,7 @@ int main(int argc, char** argv)
 #else //correct flow using NVENC (offline)
 	correctFlowNVENC(seqIdx, width, height, hasValidPixel, flowDat);
 #endif
-	 
+	
 #if 0 //generate the warp yuv for nvenc
 	{
 		char yuvfileName[256];
@@ -422,7 +453,7 @@ int main(int argc, char** argv)
 		imwrite("It.png", It);
 	}
 #endif
-
+	
 	sprintf(flowName, "%06d_10_c.png", seqIdx);
 	imwrite(flowName, flow);
 

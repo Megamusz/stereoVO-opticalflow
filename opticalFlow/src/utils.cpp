@@ -1,6 +1,6 @@
 #include "utils.h"
 
-
+#define KITTI2015
 void writeFalseColor(Mat& flow, const char* fileName, float max_flow)
 {
 	float n = 8; // multiplier
@@ -32,20 +32,32 @@ void writeFalseColor(Mat& flow, const char* fileName, float max_flow)
 Matrix getProjectionMatrix(string calibFileName, VisualOdometryStereo::parameters& param) {
 	ifstream f(calibFileName);
 	double *pDat = new double[4 * 3];
-	//string temp;
-	f >> string();
+	string temp;
+	f >> temp;
+
+#ifdef KITTI2015	//get Projection matrix of Camera 2
+	while (temp.compare("P_rect_00:"))
+		f >> temp;
+#endif
 
 	for (int m = 0; m < 3; m++) {
 		for (int n = 0; n < 4; n++) {
 			f >> pDat[m * 4 + n];
-			//cout << pDat[m * 4 + n];
+			cout << pDat[m * 4 + n] << ", ";
 		}
+		cout << endl;
 	}
-	f >> string();
+	f >> temp;
+
+#ifdef KITTI2015	//get Projection matrix of Camera 3
+	while (temp.compare("P_rect_01:"))
+		f >> temp;
+#endif
 	double baseFocal;
 	for (int i = 0; i < 4; i++)
 		f >> baseFocal;
 
+	//cout << baseFocal << endl;
 	Matrix P(3, 4, pDat);
 
 	param.calib.f = pDat[0];	// focal length in pixels
