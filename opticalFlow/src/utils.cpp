@@ -81,3 +81,20 @@ Mat readKITTIFlow(String flowName) {
 	}
 	return f;
 }
+
+void getSegments(Mat& seg, vector<uchar>& segments)
+{
+	
+
+	for (int j = 0; j < seg.rows; j++) {
+		uchar* ptr = seg.ptr<uchar>(j);
+		for (int i = 0; i < seg.cols; i++) {
+			uchar s = ptr[i];
+			if (std::find(segments.begin(), segments.end(), s) == segments.end())
+			{
+				segments.push_back(s);
+			}
+		}
+	}
+
+}

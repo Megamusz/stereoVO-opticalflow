@@ -30,3 +30,5 @@ inline void hsvToRgb(float h, float s, float v, float &r, float &g, float &b) {
 void writeFalseColor(Mat& flow, const char* fileName, float max_flow = 128);
 
 Matrix getProjectionMatrix(string calibFileName, VisualOdometryStereo::parameters& param);
+
+void getSegments(Mat& seg, vector<uchar>& segments);

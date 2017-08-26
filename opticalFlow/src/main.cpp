@@ -13,14 +13,10 @@ typedef struct {
 	ushort mvx;
 } FlowPix;
 
-void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix& Rt, uchar* Ipred, uchar* left_img_data, FlowPix*& flowDat, uchar*& hasValidPixel)
+void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix& Rt, uchar* Ipred, uchar* left_img_data, FlowPix*& flowDat, uchar*& hasValidPixel, Mat& segMap, uchar curSeg)
 {
 	//cout << Q << endl;
 	double w;
-
-	flowDat = new FlowPix[height*width];
-	memset(flowDat, 0, sizeof(FlowPix)*width*height);
-
 	double xtVal[4];
 
 	//memset(Ipred, 0, sizeof(uchar)*width*height);
@@ -30,8 +26,12 @@ void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix&
 
 	for (int j = 0; j < height; j++) {
 		short * ptrDisp = disp.ptr<short>(j);
-
+		uchar* pSeg = segMap.ptr<uchar>(j);
 		for (int i = 0; i < width; i++) {
+
+			if (pSeg[i] != curSeg)
+				continue;
+
 			double dis = ptrDisp[i] / 16.0;
 
 			if (dis < 0) {
@@ -276,17 +276,26 @@ int main(int argc, char** argv)
 
 	// current pose (this matrix transforms a point from the current
 	// frame's camera coordinates to the first frame's camera coordinates)
-	Matrix pose = Matrix::eye(4);
+	
 	char calibFileName[256];
+
 #ifdef KITTI2015
 	sprintf(calibFileName, "/calib_cam_to_cam/%06d.txt", seqIdx);
 	cout << calibFileName << endl;
+	char objFileName[256];
+	sprintf(objFileName, "/obj_map/%06d_10.png", seqIdx);
+	vector<uchar> segments;
+	Mat segMap = imread(dir + objFileName, -1);
+    getSegments(segMap, segments);
+	std::sort(segments.rbegin(), segments.rend());
+
+	cout << "segment number: " << segments.size() << endl;
+
 #else
 	sprintf(calibFileName, "/calib/%06d.txt", seqIdx);
 #endif
 	Matrix P = getProjectionMatrix(dir + calibFileName, param);
-	// init visual odometry
-	VisualOdometryStereo viso(param);
+	
 
 	//cout << P << endl;
 	// loop through all frame 10 & 11
@@ -296,123 +305,150 @@ int main(int argc, char** argv)
 	uint8_t* right_img_data = NULL;
 	uchar* Ipred = NULL; 
 	Mat It;
-	for (int32_t i = 0; i < 2; i++) {
-		// input file names
-		int frameIdx = i == 0 ? 10 : 11;
-		char base_name[256]; sprintf(base_name, "%06d_%d.png", seqIdx, frameIdx);
+
+	//loop over segment IDs to get the [R|t] for each segments
+	FlowPix* flowDat = new FlowPix[segMap.rows*segMap.cols];
+	memset(flowDat, 0, sizeof(FlowPix)*segMap.rows*segMap.cols);
+
+	while (!segments.empty()) {
+		// init visual odometry
+		VisualOdometryStereo viso(param);
+		Matrix pose = Matrix::eye(4);
+
+		int curSeg = segments.back();
+		segments.pop_back();
+		for (int32_t i = 0; i < 2; i++) {
+			// input file names
+			int frameIdx = i == 0 ? 10 : 11;
+			char base_name[256]; sprintf(base_name, "%06d_%d.png", seqIdx, frameIdx);
 
 #ifdef KITTI2015
-		string left_img_file_name = dir + "/image_2/" + base_name;
-		string right_img_file_name = dir + "/image_3/" + base_name;
+			string left_img_file_name = dir + "/image_2/" + base_name;
+			string right_img_file_name = dir + "/image_3/" + base_name;
 #else
-		string left_img_file_name	= dir + "/colored_0/" + base_name;
-		string right_img_file_name	= dir + "/colored_1/" + base_name;
+			string left_img_file_name = dir + "/colored_0/" + base_name;
+			string right_img_file_name = dir + "/colored_1/" + base_name;
 #endif
 
-		
-		// catch image read/write errors here
-		try {
-			cout << left_img_file_name << endl;
-			Mat left_img = imread(left_img_file_name, IMREAD_GRAYSCALE);
-			if (i == 0)
-				It = left_img;
-			Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
-			//estimate the disparity map
-			if (i == 0) {
+
+			// catch image read/write errors here
+			try {
+				cout << left_img_file_name << endl;
+				Mat left_img = imread(left_img_file_name, IMREAD_GRAYSCALE);
+				if (i == 0)
+					It = left_img;
+				Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
+				//estimate the disparity map
+				if (i == 0) {
 #if 0 //calculate the disparity using opencvSGM 
-				disp = calculateDisparity(left_img, right_img);
+					disp = calculateDisparity(left_img, right_img);
 #else 
 #if 0 //use GT
-				string dispName =  dir + "/disp_occ/" + base_name;
+					string dispName = dir + "/disp_occ/" + base_name;
 #else //use NVENC disparity
 #ifdef KITTI2015
-				string dispName = string("C:/Users/megamusz/Google Drive/NVENC_stereo_kitti2015_Costereo/") + base_name;
+					string dispName = string("C:/Users/megamusz/Google Drive/NVENC_stereo_kitti2015_Costereo/") + base_name;
 #else
-				string dispName = string("C:/Users/megamusz/Google Drive/NVENC + Costereo/") + base_name;
+					string dispName = string("C:/Users/megamusz/Google Drive/NVENC + Costereo/") + base_name;
 #endif
 #endif
-				disp = imread(dispName, -1);
+					disp = imread(dispName, -1);
 #ifdef KITTI2015
-				//infilling(disp);
+					//infilling(disp);
 #endif
 				//the disparity of KITTI format is Ux.8, the format from opencv sgbm is Sx.4, so multiplied by 1/16.0 to convert to openCV's format
-				disp.convertTo(disp, CV_16S, 1 / 16.0);
-				
+					disp.convertTo(disp, CV_16S, 1 / 16.0);
+
 #endif
-			}
-			// image dimensions
-			width = left_img.cols;
-			height = left_img.rows;
-
-			// convert input images to uint8_t buffer
-			if (left_img_data == NULL || right_img_data == NULL || Ipred == NULL) {
-				left_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
-				right_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
-				Ipred = new uchar[width*height];
-			}
-			int32_t k = 0;
-			for (int32_t v = 0; v<height; v++) {
-				uchar* leftPtr = left_img.ptr<uchar>(v);
-				uchar* rightPtr = right_img.ptr<uchar>(v);
-				for (int32_t u = 0; u<width; u++) {
-					left_img_data[k] = leftPtr[u];
-					right_img_data[k] = rightPtr[u];
-					if (i == 0)
-						Ipred[k] = left_img_data[k];
-					k++;
 				}
+				// image dimensions
+				width = left_img.cols;
+				height = left_img.rows;
+
+				// convert input images to uint8_t buffer
+				if (left_img_data == NULL || right_img_data == NULL || Ipred == NULL) {
+					left_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
+					right_img_data = (uint8_t*)malloc(width*height * sizeof(uint8_t));
+					Ipred = new uchar[width*height];
+				}
+				int32_t k = 0;
+				for (int32_t v = 0; v < height; v++) {
+					uchar* leftPtr = left_img.ptr<uchar>(v);
+					uchar* rightPtr = right_img.ptr<uchar>(v);
+					uchar* objPtr = segMap.ptr<uchar>(v);
+					uchar* objPtrU = segMap.ptr<uchar>(max(0, v - 1));
+					uchar* objPtrD = segMap.ptr<uchar>(min(height-1, v + 1));
+					for (int32_t u = 0; u < width; u++) {
+						if (i == 0) {
+							if (objPtr[u] == curSeg || objPtrU[u] == curSeg || objPtrD[u]== curSeg)
+								left_img_data[k] = leftPtr[u];
+							else
+								left_img_data[k] = 0;
+						} else 
+							left_img_data[k] = leftPtr[u];
+						right_img_data[k] = rightPtr[u];
+						
+						Ipred[k] = left_img_data[k];
+						k++;
+					}
+				}
+
+				//Mat segImg(height, width, CV_8U, left_img_data);
+				//imwrite("segIM.png", segImg);
+
+				// status
+				cout << "Processing: Frame: " << frameIdx << endl;
+				// compute visual odometry
+				int32_t dims[] = { width,height,width };
+				if (viso.process(left_img_data, right_img_data, dims)) {
+
+					// on success, update current pose
+					pose = pose * Matrix::inv(viso.getMotion());
+
+					// output some statistics
+					double num_matches = viso.getNumberOfMatches();
+					double num_inliers = viso.getNumberOfInliers();
+					cout << ", Matches: " << num_matches;
+					cout << ", Inliers: " << 100.0*num_inliers / num_matches << " %" << ", Current pose: " << endl;
+					cout << pose << endl << endl;
+
+				}
+				else {
+					cout << " ... failed!" << endl;
+				}
+
+
+				// catch image read errors here
 			}
-
-			// status
-			cout << "Processing: Frame: " << frameIdx << endl;
-			// compute visual odometry
-			int32_t dims[] = { width,height,width };
-			if (viso.process(left_img_data, right_img_data, dims)) {
-
-				// on success, update current pose
-				pose = pose * Matrix::inv(viso.getMotion());
-
-				// output some statistics
-				double num_matches = viso.getNumberOfMatches();
-				double num_inliers = viso.getNumberOfInliers();
-				cout << ", Matches: " << num_matches;
-				cout << ", Inliers: " << 100.0*num_inliers / num_matches << " %" << ", Current pose: " << endl;
-				cout << pose << endl << endl;
-
+			catch (...) {
+				cerr << "ERROR: Couldn't read input files!" << endl;
+				return 1;
 			}
-			else {
-				cout << " ... failed!" << endl;
-			}
-
-
-			// catch image read errors here
 		}
-		catch (...) {
-			cerr << "ERROR: Couldn't read input files!" << endl;
-			return 1;
-		}
+
+
+		//get the predicted flow
+		Matrix Xt(4, 1);
+		double qDat[4][4] = { 0 };
+		qDat[0][0] = qDat[1][1] = 1;
+		qDat[0][3] = -param.calib.cu;
+		qDat[1][3] = -param.calib.cv;
+		qDat[2][3] = param.calib.f;
+		qDat[3][2] = -1 / param.base;
+		Matrix Q(4, 4, &qDat[0][0]);//triangular matrix
+
+		
+		uchar* hasValidPixel;
+
+		predictFlow(disp, width, height, Q, P, viso.getMotion(), Ipred, left_img_data, flowDat, hasValidPixel, segMap, curSeg);
+
+		//char predImageName[256];
+		//sprintf(predImageName, "%06d_10_pred.png", seqIdx);
+		//Mat Ip(height, width, CV_8U, Ipred);
+		//imwrite(predImageName, Ip);
+
+		
 	}
-
-
-	//get the predicted flow
-	Matrix Xt(4, 1);
-	double qDat[4][4] = { 0 };
-	qDat[0][0] = qDat[1][1] = 1;
-	qDat[0][3] = -param.calib.cu;
-	qDat[1][3] = -param.calib.cv;
-	qDat[2][3] = param.calib.f;
-	qDat[3][2] = -1 / param.base;
-	Matrix Q(4, 4, &qDat[0][0]);//triangular matrix
-	
-	FlowPix* flowDat;
-	uchar* hasValidPixel;
-
-	predictFlow(disp, width, height, Q, P, viso.getMotion(), Ipred, left_img_data, flowDat, hasValidPixel);
-
-	char predImageName[256];
-	sprintf(predImageName, "%06d_10_pred.png", seqIdx);
-	Mat Ip(height, width, CV_8U, Ipred);
-	imwrite(predImageName, Ip);
 
 	Mat flow(height, width, CV_16UC3, flowDat);
 	char flowName[256];
@@ -422,7 +458,7 @@ int main(int argc, char** argv)
 #if 0 //correct flow using Opencv farneback
 	correctFlow(It, Ip, width, height, hasValidPixel, flowDat);
 #else //correct flow using NVENC (offline)
-	correctFlowNVENC(seqIdx, width, height, hasValidPixel, flowDat);
+	//correctFlowNVENC(seqIdx, width, height, hasValidPixel, flowDat);
 #endif
 	
 #if 0 //generate the warp yuv for nvenc
@@ -453,6 +489,7 @@ int main(int argc, char** argv)
 		imwrite("It.png", It);
 	}
 #endif
+	/*
 	
 	sprintf(flowName, "%06d_10_c.png", seqIdx);
 	imwrite(flowName, flow);
@@ -463,7 +500,7 @@ int main(int argc, char** argv)
 	free(right_img_data);
 	delete[] Ipred;
 	delete[] hasValidPixel;
-
+	*/
 	return 0;
 }
 
