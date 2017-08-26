@@ -31,6 +31,10 @@ void writeFalseColor(Mat& flow, const char* fileName, float max_flow)
 //get the project matrix from KITTI calibration file, as well as initialize the param for VOstereo
 Matrix getProjectionMatrix(string calibFileName, VisualOdometryStereo::parameters& param) {
 	ifstream f(calibFileName);
+	if (!f.is_open()) {
+		cout << "cant open: " << calibFileName << endl;
+		exit(1);
+	}
 	double *pDat = new double[4 * 3];
 	string temp;
 	f >> temp;

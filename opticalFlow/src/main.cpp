@@ -309,7 +309,8 @@ int main(int argc, char** argv)
 	//loop over segment IDs to get the [R|t] for each segments
 	FlowPix* flowDat = new FlowPix[segMap.rows*segMap.cols];
 	memset(flowDat, 0, sizeof(FlowPix)*segMap.rows*segMap.cols);
-
+	bool isVoSuccess = true;
+	Matrix RTseg0;
 	while (!segments.empty()) {
 		// init visual odometry
 		VisualOdometryStereo viso(param);
@@ -411,9 +412,10 @@ int main(int argc, char** argv)
 					cout << ", Matches: " << num_matches;
 					cout << ", Inliers: " << 100.0*num_inliers / num_matches << " %" << ", Current pose: " << endl;
 					cout << pose << endl << endl;
-
+					isVoSuccess = true;
 				}
 				else {
+					isVoSuccess = false;
 					cout << " ... failed!" << endl;
 				}
 
@@ -439,8 +441,10 @@ int main(int argc, char** argv)
 
 		
 		uchar* hasValidPixel;
+		if (curSeg == 0)
+			RTseg0 = viso.getMotion();
 
-		predictFlow(disp, width, height, Q, P, viso.getMotion(), Ipred, left_img_data, flowDat, hasValidPixel, segMap, curSeg);
+		predictFlow(disp, width, height, Q, P, isVoSuccess? viso.getMotion():RTseg0, Ipred, left_img_data, flowDat, hasValidPixel, segMap, curSeg);
 
 		//char predImageName[256];
 		//sprintf(predImageName, "%06d_10_pred.png", seqIdx);
