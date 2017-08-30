@@ -21,8 +21,7 @@ void predictFlow(Mat& disp, int width, int height, Matrix& Q, Matrix& P, Matrix&
 
 	//memset(Ipred, 0, sizeof(uchar)*width*height);
 	//memcpy(Ipred, left_img_data, sizeof(uchar)*width*height);
-	hasValidPixel = new uchar[width*height];
-	memset(hasValidPixel, 0, sizeof(uchar)*width*height);
+
 
 	for (int j = 0; j < height; j++) {
 		short * ptrDisp = disp.ptr<short>(j);
@@ -213,9 +212,9 @@ void correctFlow(Mat& It, Mat& Ip, int width, int height, uchar* hasValidPixel, 
 {
 	//correction stage
 	Mat flowC;
-	calcOpticalFlowSparseToDense(It, Ip, flowC, 4, 128, 0.001);
-	//calcOpticalFlowFarneback(It, Ip, flowC, 0.8, 1, 11, 1, 2, 1.5, 0);
-	writeFalseColor(flowC, "flowC.png", 10);
+	//calcOpticalFlowSparseToDense(It, Ip, flowC, 4, 128, 0.001);
+	calcOpticalFlowFarneback(It, Ip, flowC, 0.8, 1, 11, 1, 2, 1.5, 0);
+	//writeFalseColor(flowC, "flowC.png", 10);
 	//u(x, y) = ?u(x, y) + upred(x + ?u(x, y), y + ?v(x, y))
 	for (int j = 0; j < height; j++) {
 		for (int i = 0; i < width; i++) {
@@ -264,7 +263,7 @@ void correctFlowNVENC(int seqIdx, int width, int height, uchar* hasValidPixel, F
 int main(int argc, char** argv)
 {
 	if (argc < 3) {
-		cout << "usage: optflow directory seqenceIdx" << endl;
+		std::cout << "usage: optflow directory seqenceIdx" << endl;
 	}
 	//C:\Users\megamusz\Desktop\data_stereo_flow\training
 	string dir = argv[1];
@@ -304,20 +303,34 @@ int main(int argc, char** argv)
 	uint8_t* left_img_data = NULL;
 	uint8_t* right_img_data = NULL;
 	uchar* Ipred = NULL; 
-	Mat It;
+	Mat I1t, I1t1;
 
 	//loop over segment IDs to get the [R|t] for each segments
 	FlowPix* flowDat = new FlowPix[segMap.rows*segMap.cols];
 	memset(flowDat, 0, sizeof(FlowPix)*segMap.rows*segMap.cols);
+	
+	uchar* hasValidPixel = new uchar[segMap.rows*segMap.cols];
+	memset(hasValidPixel, 0, sizeof(uchar)*segMap.rows*segMap.cols);
+
 	bool isVoSuccess = true;
 	Matrix RTseg0;
 	while (!segments.empty()) {
+		int curSeg = segments.back();
+		segments.pop_back();
+		if (curSeg > 0) {
+			param.bucket.bucket_height = param.bucket.bucket_width = 5;
+			param.bucket.max_features = 10;
+			param.match.nms_n = 1; 
+			param.match.multi_stage = 0;
+			param.match.half_resolution = 0;
+			param.match.nms_tau = 3;
+		}
+			
 		// init visual odometry
 		VisualOdometryStereo viso(param);
 		Matrix pose = Matrix::eye(4);
 
-		int curSeg = segments.back();
-		segments.pop_back();
+		
 		for (int32_t i = 0; i < 2; i++) {
 			// input file names
 			int frameIdx = i == 0 ? 10 : 11;
@@ -336,16 +349,27 @@ int main(int argc, char** argv)
 			try {
 				cout << left_img_file_name << endl;
 				Mat left_img = imread(left_img_file_name, IMREAD_GRAYSCALE);
-				if (i == 0)
-					It = left_img;
 				Mat right_img = imread(right_img_file_name, IMREAD_GRAYSCALE);
+
+				if (i == 0) {
+					I1t = left_img;
+					
+				}
+				else {
+					I1t1 = left_img;
+				}
+						
 				//estimate the disparity map
 				if (i == 0) {
 #if 0 //calculate the disparity using opencvSGM 
 					disp = calculateDisparity(left_img, right_img);
 #else 
 #if 0 //use GT
+#ifdef KITTI2015 
+					string dispName = dir + "/disp_occ_0/" + base_name;
+#else
 					string dispName = dir + "/disp_occ/" + base_name;
+#endif
 #else //use NVENC disparity
 #ifdef KITTI2015
 					string dispName = string("C:/Users/megamusz/Google Drive/NVENC_stereo_kitti2015_Costereo/") + base_name;
@@ -389,7 +413,8 @@ int main(int argc, char** argv)
 							left_img_data[k] = leftPtr[u];
 						right_img_data[k] = rightPtr[u];
 						
-						Ipred[k] = left_img_data[k];
+						if(curSeg == 0)
+							Ipred[k] = leftPtr[u];
 						k++;
 					}
 				}
@@ -440,17 +465,11 @@ int main(int argc, char** argv)
 		Matrix Q(4, 4, &qDat[0][0]);//triangular matrix
 
 		
-		uchar* hasValidPixel;
+		
 		if (curSeg == 0)
 			RTseg0 = viso.getMotion();
 
 		predictFlow(disp, width, height, Q, P, isVoSuccess? viso.getMotion():RTseg0, Ipred, left_img_data, flowDat, hasValidPixel, segMap, curSeg);
-
-		//char predImageName[256];
-		//sprintf(predImageName, "%06d_10_pred.png", seqIdx);
-		//Mat Ip(height, width, CV_8U, Ipred);
-		//imwrite(predImageName, Ip);
-
 		
 	}
 
@@ -458,6 +477,11 @@ int main(int argc, char** argv)
 	char flowName[256];
 	sprintf(flowName, "%06d_10.png", seqIdx);
 	imwrite(flowName, flow);
+
+	char predImageName[256];
+	sprintf(predImageName, "%06d_10_pred.png", seqIdx);
+	Mat Ip(height, width, CV_8U, Ipred);
+	imwrite(predImageName, Ip);
 
 #if 0 //correct flow using Opencv farneback
 	correctFlow(It, Ip, width, height, hasValidPixel, flowDat);
@@ -493,18 +517,22 @@ int main(int argc, char** argv)
 		imwrite("It.png", It);
 	}
 #endif
-	/*
 	
-	sprintf(flowName, "%06d_10_c.png", seqIdx);
-	imwrite(flowName, flow);
 
-	delete[] flowDat;
-	// release uint8_t buffers
-	free(left_img_data);
-	free(right_img_data);
-	delete[] Ipred;
-	delete[] hasValidPixel;
-	*/
+	//Ptr<VariationalRefinement> vptr = createVariationalFlowRefinement();
+	//Mat Fp = readKITTIFlow(flowName);
+	//vptr->calc(I1t, I1t1, Fp);
+	//
+	//sprintf(flowName, "%06d_10_c.png", seqIdx);
+	//imwrite(flowName, toKITTIflow(Fp));
+	//
+	//delete[] flowDat;
+	//// release uint8_t buffers
+	//free(left_img_data);
+	//free(right_img_data);
+	//delete[] Ipred;
+	//delete[] hasValidPixel;
+	
 	return 0;
 }
 

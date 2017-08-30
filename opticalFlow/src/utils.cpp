@@ -86,6 +86,18 @@ Mat readKITTIFlow(String flowName) {
 	return f;
 }
 
+Mat toKITTIflow(Mat& flow) {
+	Mat kf(flow.rows, flow.cols, CV_16UC3);
+	for (int j = 0; j < flow.rows; j++) {
+		
+		for (int i = 0; i < flow.cols; i++) {
+			kf.at<Vec3w>(j, i).val[0] = 1;
+			kf.at<Vec3w>(j, i).val[1] = flow.at<Vec2f>(j, i).val[1] * 64 + 32768;
+			kf.at<Vec3w>(j, i).val[2] = flow.at<Vec2f>(j, i).val[0] * 64 + 32768;
+		}
+	}
+	return kf;
+}
 void getSegments(Mat& seg, vector<uchar>& segments)
 {
 	
