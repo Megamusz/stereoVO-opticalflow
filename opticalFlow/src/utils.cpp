@@ -75,8 +75,8 @@ Mat readKITTIFlow(String flowName) {
 	Mat f(raw.size(), CV_32FC2);
 	for (int j = 0; j < raw.rows; j++) {
 		for (int i = 0; i < raw.cols; i++) {
-			f.at<Vec2f>(j, i).val[0] = (raw.at<Vec3w>(j, i).val[2] - 32768) / 64.0;
-			f.at<Vec2f>(j, i).val[1] = (raw.at<Vec3w>(j, i).val[1] - 32768) / 64.0;
+			f.at<Vec2f>(j, i).val[0] = ((int)raw.at<Vec3w>(j, i).val[2] - 32768) / 64.0;
+			f.at<Vec2f>(j, i).val[1] = ((int)raw.at<Vec3w>(j, i).val[1] - 32768) / 64.0;
 		}
 	}
 	return f;
